@@ -1,0 +1,135 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  frontend-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install frontend deps
+        run: cd frontend && npm install
+
+      - name: Run ESLint
+        run: cd frontend && npm run lint
+
+      - name: ESLint Metrics
+        run: |
+          cd frontend
+          npx eslint . --ext js,jsx -f json -o eslint-report.json || true
+          echo "### ESLint Results" >> $GITHUB_STEP_SUMMARY
+          node -e "
+            const fs = require('fs');
+            let errors = 0, warnings = 0;
+            try {
+              const r = require('./eslint-report.json');
+              r.forEach(f => { errors += f.errorCount; warnings += f.warningCount; });
+            } catch (e) {
+              console.log('No ESLint report available');
+            }
+            console.log('Errors:', errors, 'Warnings:', warnings);
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, 'Errors: ' + errors + ' | Warnings: ' + warnings + '\n');
+          "
+
+  backend-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Run tests with JaCoCo
+        run: cd backend && mvn test
+
+      - name: Extract Test & Coverage Metrics
+        run: |
+          cd backend
+          echo "### Backend Test Metrics" >> $GITHUB_STEP_SUMMARY
+          if ls target/surefire-reports/*.txt 1> /dev/null 2>&1; then
+            grep -h "Tests run" target/surefire-reports/*.txt | head -1 >> $GITHUB_STEP_SUMMARY || true
+          fi
+          if [ -f target/site/jacoco/jacoco.csv ]; then
+            echo "JaCoCo report generated." >> $GITHUB_STEP_SUMMARY
+            awk -F, 'NR>1 {
+                instructions += $4 + $5;
+                covered_i    += $5;
+                branches     += $6 + $7;
+                covered_b    += $7;
+              }
+              END {
+                if (instructions > 0) {
+                  printf "Instruction Coverage: %.1f%%\n", (covered_i / instructions) * 100;
+                } else {
+                  print "Instruction Coverage: n/a (no instructions)";
+                }
+                if (branches > 0) {
+                  printf "Branch Coverage: %.1f%%\n", (covered_b / branches) * 100;
+                } else {
+                  print "Branch Coverage: n/a (no branches)";
+                }
+              }' target/site/jacoco/jacoco.csv >> $GITHUB_STEP_SUMMARY || \
+              echo "Failed to parse JaCoCo CSV" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload JaCoCo Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: backend/target/site/jacoco/
+
+  build:
+    needs: [frontend-lint, backend-test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build backend JAR
+        run: cd backend && mvn package -DskipTests
+
+      - name: Upload JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-jar
+          path: backend/target/*.jar
+
+  git-metrics:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Commit Frequency & Branch Info
+        run: |
+          echo "### Git Metrics (PR)" >> $GITHUB_STEP_SUMMARY
+          echo "Commits in this PR branch:" >> $GITHUB_STEP_SUMMARY
+          git rev-list --count origin/${{ github.base_ref }}..HEAD >> $GITHUB_STEP_SUMMARY
+          echo "Average commit size (lines changed per commit):" >> $GITHUB_STEP_SUMMARY
+          git log origin/${{ github.base_ref }}..HEAD --pretty=tformat: --numstat | \
+            awk '{ add += $1; subs += $2; loc += $1 - $2 } END { printf "Added: %s, Deleted: %s, Net: %s\n", add, subs, loc }' >> $GITHUB_STEP_SUMMARY
+            
