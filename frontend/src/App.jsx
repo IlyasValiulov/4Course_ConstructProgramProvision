@@ -1,21 +1,48 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import RegisterPage from './pages/RegisterPage';
+import LoginPage from './pages/LoginPage';
+import PropertiesPage from './pages/PropertiesPage';
+import BookingPage from './pages/BookingPage';
 
-function App() {
-  const [message, setMessage] = useState('Loading...');
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [selectedProperty, setSelectedProperty] = useState(null);
+  const [screen, setScreen] = useState('login');
 
-  useEffect(() => {
-    fetch('http://localhost:8080/api/health')
-      .then(res => res.text())
-      .then(setMessage)
-      .catch(() => setMessage('Backend not reachable'));
-  }, []);
+  if (selectedProperty && user) {
+    return (
+      <BookingPage
+        property={selectedProperty}
+        currentUser={user}
+        onBack={() => setSelectedProperty(null)}
+      />
+    );
+  }
+
+  if (user) {
+    return (
+      <div>
+        <div style={{ padding: '1rem 2rem', borderBottom: '1px solid #ddd', display: 'flex', justifyContent: 'space-between' }}>
+          <span>Вы вошли как <strong>{user.username}</strong></span>
+          <button onClick={() => { setUser(null); setScreen('login'); }}>Выйти</button>
+        </div>
+        <PropertiesPage
+          currentUser={user}
+          onSelectProperty={setSelectedProperty}
+        />
+      </div>
+    );
+  }
 
   return (
-    <div style={{ padding: '2rem', fontFamily: 'sans-serif' }}>
-      <h1>Сервис аренды жилья</h1>
-      <p>Статус backend: <strong>{message}</strong></p>
+    <div>
+      <div style={{ padding: '1rem 2rem', display: 'flex', gap: 8 }}>
+        <button onClick={() => setScreen('login')}>Вход</button>
+        <button onClick={() => setScreen('register')}>Регистрация</button>
+      </div>
+      {screen === 'register'
+        ? <RegisterPage onRegistered={(u) => { setUser(u); setScreen('login'); }} />
+        : <LoginPage onLoggedIn={setUser} />}
     </div>
   );
 }
-
-export default App;
